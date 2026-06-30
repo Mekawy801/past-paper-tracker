@@ -36,8 +36,25 @@ const DEFAULT_TOTALS = {
   alevel: { 1: 40, 2: 60, 4: 100 },
   combined: {},
 };
+const LOCK_CUTOFF_YEAR = 2023; // exams from this year onward use fixed, uneditable totals
+
 function getDefaultTotal(subject, paper) {
   return DEFAULT_TOTALS[subject]?.[paper] ?? null;
+}
+
+// Resolves whether a given exam's total is locked, and to what value.
+// Returns { locked: bool, total: number|null, source: "builtin"|"manual"|null }
+function resolveExamTotal(subject, paper, year, ek) {
+  if (year >= LOCK_CUTOFF_YEAR) {
+    const builtin = getDefaultTotal(subject, paper);
+    return { locked: true, total: builtin, source: "builtin" };
+  }
+  // pre-cutoff: locked only if teacher has manually locked this specific exam
+  const manualLock = STATE.lockedTotals?.[ek];
+  if (manualLock != null) {
+    return { locked: true, total: manualLock, source: "manual" };
+  }
+  return { locked: false, total: STATE.examTotals?.[ek] ?? null, source: null };
 }
 
 const DEFAULT_TEACHER_PASSCODE = "teach2027";
@@ -72,6 +89,7 @@ const DEFAULT_STATE = {
   classes: [],
   submissions: [],
   examTotals: {},
+  lockedTotals: {}, // { examKey: totalMarks } — pre-2023 exams manually locked by teacher
   resolvedQuestions: {},
   teacherPasscode: DEFAULT_TEACHER_PASSCODE,
 };
@@ -491,16 +509,29 @@ function renderSubmitForm(student) {
   }
 
   const ek = f.paper && f.year && f.session && f.variant ? examKey(student.subject, f.paper, f.year, f.session, f.variant) : null;
-  const builtInDefault = f.paper != null ? getDefaultTotal(student.subject, f.paper) : null;
-  const storedOverride = ek != null ? STATE.examTotals[ek] : undefined;
-  const defaultTotal = storedOverride != null ? storedOverride : builtInDefault;
+  const resolved = ek != null ? resolveExamTotal(student.subject, f.paper, f.year, ek) : { locked: false, total: null, source: null };
+  const defaultTotal = resolved.total;
 
   if (ek && !f.editTotal && f.totalInput === "") {
     f.totalInput = defaultTotal != null ? String(defaultTotal) : "";
   }
+  // if locked, always force the field to the locked value regardless of any stale local edit
+  if (ek && resolved.locked && defaultTotal != null) {
+    f.totalInput = String(defaultTotal);
+  }
 
   let detailsBlock = "";
   if (ek) {
+    let totalHelp;
+    if (resolved.locked && resolved.source === "builtin") {
+      totalHelp = `Total marks are fixed at ${defaultTotal} for this paper.`;
+    } else if (resolved.locked && resolved.source === "manual") {
+      totalHelp = `Total marks are locked at ${defaultTotal} based on past submissions for this exam.`;
+    } else if (defaultTotal != null) {
+      totalHelp = `Total defaults to ${defaultTotal}. Change it if questions were cancelled on this paper.`;
+    } else {
+      totalHelp = "No default for this paper — enter the total marks for this exam.";
+    }
     detailsBlock = `
       <div class="ui" style="background:var(--surface-2);border-radius:10px;padding:10px 14px;font-size:13px;color:var(--ink-soft);margin-bottom:22px;">
         Logging: <strong style="color:var(--ink);">${escapeHtml(examLabel(student.subject, f.paper, f.year, f.session, f.variant))}</strong>
@@ -510,10 +541,10 @@ function renderSubmitForm(student) {
         <div style="display:flex;gap:10px;align-items:center;">
           <input id="form-score" type="number" placeholder="Your mark" value="${escapeHtml(f.score)}" style="flex:1;" />
           <span class="ui" style="color:var(--ink-soft);">/</span>
-          <input id="form-total" type="number" placeholder="Total" value="${escapeHtml(f.totalInput)}" style="flex:1;" />
+          <input id="form-total" type="number" placeholder="Total" value="${escapeHtml(f.totalInput)}" style="flex:1;" ${resolved.locked ? "disabled" : ""} />
         </div>
         <div class="ui" style="font-size:12px;color:var(--ink-soft);margin-top:6px;">
-          ${defaultTotal != null ? `Total defaults to ${defaultTotal}. Change it if questions were cancelled on this paper.` : "No default for this paper — enter the total marks for this exam."}
+          ${totalHelp}
         </div>
       </div>
       <div class="field">
@@ -553,6 +584,7 @@ function renderTeacherApp() {
     ["students", "Student Progress"],
     ["roster", "Manage Roster"],
     ["classes", "Manage Classes"],
+    ["totals", "Lock Totals"],
     ["log", "All Submissions"],
     ["settings", "Settings"],
   ];
@@ -569,6 +601,7 @@ function renderTeacherApp() {
   else if (TEACHER_SESSION.tab === "students") body = renderStudentsTab();
   else if (TEACHER_SESSION.tab === "roster") body = renderRosterTab();
   else if (TEACHER_SESSION.tab === "classes") body = renderClassesTab();
+  else if (TEACHER_SESSION.tab === "totals") body = renderLockTotalsTab();
   else if (TEACHER_SESSION.tab === "log") body = renderLogTab();
   else if (TEACHER_SESSION.tab === "settings") body = renderSettingsTab();
 
@@ -996,7 +1029,71 @@ function renderClassesTab() {
   `;
 }
 
-/* ---------------- ALL SUBMISSIONS (LOG) TAB ---------------- */
+/* ---------------- LOCK TOTALS TAB (pre-2023 exams) ---------------- */
+
+function modeOf(arr) {
+  const counts = new Map();
+  for (const v of arr) counts.set(v, (counts.get(v) || 0) + 1);
+  let best = null, bestCount = 0;
+  for (const [v, c] of counts) {
+    if (c > bestCount) { best = v; bestCount = c; }
+  }
+  return { value: best, count: bestCount, total: arr.length };
+}
+
+function renderLockTotalsTab() {
+  // Group all submissions for pre-cutoff exams by examKey
+  const preCutoff = STATE.submissions.filter((s) => s.year < LOCK_CUTOFF_YEAR);
+  const byExam = new Map();
+  for (const sub of preCutoff) {
+    if (!byExam.has(sub.examKey)) {
+      byExam.set(sub.examKey, { examKey: sub.examKey, examLabel: sub.examLabel, totals: [] });
+    }
+    byExam.get(sub.examKey).totals.push(sub.total);
+  }
+
+  const rows = Array.from(byExam.values())
+    .sort((a, b) => a.examLabel.localeCompare(b.examLabel))
+    .map((group) => {
+      const { value, count, total } = modeOf(group.totals);
+      const isLocked = STATE.lockedTotals?.[group.examKey] != null;
+      const lockedValue = STATE.lockedTotals?.[group.examKey];
+      const action = isLocked
+        ? `<button class="btn btn-ghost btn-small" data-action="unlock-total" data-examkey="${group.examKey}">Unlock</button>`
+        : `<button class="btn btn-primary btn-small" data-action="lock-total" data-examkey="${group.examKey}" data-value="${value}">Lock at ${value}</button>`;
+      return `
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid var(--line);gap:14px;flex-wrap:wrap;">
+          <div>
+            <div style="font-weight:600;font-size:14px;" class="ui">${escapeHtml(group.examLabel)}</div>
+            <div class="ui" style="font-size:12px;color:var(--ink-soft);margin-top:2px;">
+              ${isLocked
+                ? `Locked at ${lockedValue}`
+                : `Most common total: ${value} (${count} of ${total} submission${total === 1 ? "" : "s"})`}
+            </div>
+          </div>
+          ${action}
+        </div>
+      `;
+    })
+    .join("");
+
+  return `
+    <div>
+      <div class="card" style="margin-bottom:20px;">
+        <h3 style="margin:0 0 8px;font-size:16px;">How this works</h3>
+        <p class="ui" style="font-size:13px;color:var(--ink-soft);margin:0;line-height:1.6;">
+          Exams from ${LOCK_CUTOFF_YEAR} onward always use fixed total marks and can't be changed by students.
+          Exams before ${LOCK_CUTOFF_YEAR} stay editable until you lock them here — once locked, the total is fixed
+          for everyone going forward, the same way as newer exams.
+        </p>
+      </div>
+      <div class="card">
+        <h3 style="margin:0 0 16px;font-size:16px;">Exams with submitted data</h3>
+        ${byExam.size === 0 ? emptyState("No pre-" + LOCK_CUTOFF_YEAR + " submissions yet.") : rows}
+      </div>
+    </div>
+  `;
+}
 
 let logTabState = { confirmDeleteId: null };
 
@@ -1382,6 +1479,22 @@ async function onRootClick(e) {
       exportCsv();
       break;
 
+    /* ---- Lock Totals ---- */
+    case "lock-total": {
+      const ek = el.getAttribute("data-examkey");
+      const value = Number(el.getAttribute("data-value"));
+      const next = { ...STATE.lockedTotals, [ek]: value };
+      await saveState({ lockedTotals: next });
+      break;
+    }
+    case "unlock-total": {
+      const ek = el.getAttribute("data-examkey");
+      const next = { ...STATE.lockedTotals };
+      delete next[ek];
+      await saveState({ lockedTotals: next });
+      break;
+    }
+
     /* ---- Settings ---- */
     case "settings-save":
       await handleSettingsSave();
@@ -1470,6 +1583,17 @@ async function handleFormSubmit() {
 
   const questions = f.difficultRaw.split(/[,;\n]+/).map((s) => s.trim()).filter(Boolean);
   const ek = examKey(student.subject, f.paper, f.year, f.session, f.variant);
+  const resolved = resolveExamTotal(student.subject, f.paper, f.year, ek);
+
+  // Enforce locked totals regardless of what was in the (disabled) input,
+  // in case of any stale client state.
+  const finalTotal = resolved.locked && resolved.total != null ? resolved.total : totalNum;
+  if (scoreNum > finalTotal) {
+    f.error = "Score can't be higher than the total.";
+    render();
+    return;
+  }
+
   const submission = {
     id: uid(),
     studentId: student.id,
@@ -1478,17 +1602,15 @@ async function handleFormSubmit() {
     paper: f.paper, year: f.year, session: f.session, variant: f.variant,
     examKey: ek,
     examLabel: examLabel(student.subject, f.paper, f.year, f.session, f.variant),
-    score: scoreNum, total: totalNum, minutes: minNum,
+    score: scoreNum, total: finalTotal, minutes: minNum,
     difficultQuestions: questions,
     submittedAt: new Date().toISOString(),
   };
 
-  const builtInDefault = getDefaultTotal(student.subject, f.paper);
-  const storedOverride = STATE.examTotals[ek];
-  const defaultTotal = storedOverride != null ? storedOverride : builtInDefault;
   const patch = { submissions: [...STATE.submissions, submission] };
-  if (defaultTotal == null || totalNum !== defaultTotal) {
-    patch.examTotals = { ...STATE.examTotals, [ek]: totalNum };
+  // Only pre-2023, unlocked exams can have their total remembered as a running override
+  if (!resolved.locked && (resolved.total == null || finalTotal !== resolved.total)) {
+    patch.examTotals = { ...STATE.examTotals, [ek]: finalTotal };
   }
 
   await saveState(patch);
@@ -1591,3 +1713,16 @@ window.__getState = () => STATE;
 window.__saveState = saveState;
 Object.defineProperty(window, "STATE", { get: () => STATE });
 window.saveState = saveState;
+window.render = render;
+Object.defineProperty(window, "VIEW", {
+  get: () => VIEW,
+  set: (v) => { VIEW = v; },
+});
+Object.defineProperty(window, "STUDENT_SESSION", {
+  get: () => STUDENT_SESSION,
+  set: (v) => { STUDENT_SESSION = v; },
+});
+Object.defineProperty(window, "TEACHER_SESSION", {
+  get: () => TEACHER_SESSION,
+  set: (v) => { TEACHER_SESSION = v; },
+});

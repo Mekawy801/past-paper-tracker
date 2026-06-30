@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no" />
+<title>Past Paper Tracker — Dr. Mohamed El-Mekawy</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<!-- ============================================================
+     FIREBASE SETUP
+     Replace the values below with your own Firebase project config.
+     See the setup guide that came with this file for step-by-step instructions.
+     ============================================================ -->
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+  import {
+    getFirestore, doc, getDoc, setDoc, onSnapshot
+  } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+  const firebaseConfig = {
+    apiKey: "AIzaSyBWQTbyCFJxLsypcyVIK5gC4-KeXnxXfEw",
+    authDomain: "past-paper-tracker-51a18.firebaseapp.com",
+    projectId: "past-paper-tracker-51a18",
+    storageBucket: "past-paper-tracker-51a18.firebasestorage.app",
+    messagingSenderId: "7364242011",
+    appId: "1:7364242011:web:839ff4cc39b155d3aeed7e"
+  };
+
+  const firebaseApp = initializeApp(firebaseConfig);
+  const db = getFirestore(firebaseApp);
+
+  // Single-document store: everything lives under one Firestore doc for simplicity.
+  const DOC_REF = doc(db, "exam-tracker", "data");
+
+  window.__firestore = { db, doc, getDoc, setDoc, onSnapshot, DOC_REF };
+  window.__firebaseReady = true;
+  window.dispatchEvent(new Event("firebase-ready"));
+</script>
+
+<style>
+  :root {
+    --bg: #F8FAFB;
+    --surface: #FFFFFF;
+    --surface-2: #EEF2F5;
+    --ink: #16202B;
+    --ink-soft: #7D8B97;
+    --line: #DEE5EA;
+    --accent: #2C5F8A;
+    --accent-ink: #F8FAFB;
+    --accent-tint: #E2EBF2;
+    --good: #3C7A5E;
+    --danger: #B23B3B;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: 'Newsreader', 'Iowan Old Style', Georgia, serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .ui { font-family: 'Inter', system-ui, sans-serif; }
+  input, select, textarea {
+    font-family: 'Inter', system-ui, sans-serif;
+    font-size: 15px;
+    padding: 12px 14px;
+    border-radius: 10px;
+    border: 1px solid var(--line);
+    background: var(--surface);
+    color: var(--ink);
+    width: 100%;
+    outline: none;
+  }
+  input:focus, select:focus, textarea:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-tint);
+  }
+  ::placeholder { color: #A9B3BB; }
+  button { font-family: inherit; }
+  #root { min-height: 100vh; width: 100%; }
+
+  .btn {
+    font-family: 'Inter', system-ui, sans-serif;
+    font-size: 15px;
+    font-weight: 600;
+    padding: 12px 20px;
+    border-radius: 10px;
+    border: none;
+    cursor: pointer;
+    transition: transform 0.08s ease;
+  }
+  .btn:active { transform: scale(0.97); }
+  .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+  .btn-primary { background: var(--accent); color: var(--accent-ink); }
+  .btn-ghost { background: transparent; color: var(--ink); border: 1px solid var(--line); }
+  .btn-quiet { background: var(--surface-2); color: var(--ink); }
+  .btn-danger { background: transparent; color: var(--danger); border: 1px solid var(--danger); }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: 22px;
+  }
+
+  .chip {
+    padding: 12px 18px;
+    border-radius: 12px;
+    border: 1px solid var(--line);
+    background: var(--surface);
+    color: var(--ink);
+    font-weight: 500;
+    font-size: 15px;
+    cursor: pointer;
+    min-width: 64px;
+  }
+  .chip.active {
+    border: 1.5px solid var(--accent);
+    background: var(--accent-tint);
+    font-weight: 700;
+  }
+
+  .label {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    margin-bottom: 10px;
+  }
+
+  .field { margin-bottom: 22px; }
+
+  .tab-btn {
+    padding: 9px 16px;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    background: var(--surface);
+    color: var(--ink);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .tab-btn.active { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+
+  .keypad {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+    max-width: 260px;
+    margin: 0 auto;
+  }
+  .key {
+    font-size: 20px;
+    font-weight: 600;
+    padding: 16px 0;
+    border-radius: 12px;
+    border: 1px solid var(--line);
+    background: var(--surface);
+    color: var(--ink);
+    cursor: pointer;
+  }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { padding: 10px 14px; font-weight: 700; white-space: nowrap; text-align: left; }
+  td { padding: 10px 14px; }
+  tr.row-border { border-top: 1px solid var(--line); }
+
+  @media (max-width: 640px) {
+    .hide-mobile { display: none !important; }
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<div id="loading-screen" class="ui" style="position:fixed;inset:0;display:flex;align-items:center;justify-content:center;color:var(--ink-soft);font-size:14px;">
+  Loading…
+</div>
+<script src="app.js"></script>
+</body>
+</html>

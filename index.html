@@ -99,6 +99,43 @@
   .btn-danger { background: transparent; color: var(--danger); border: 1px solid var(--danger); }
   .btn-small { font-size: 12px; padding: 7px 12px; }
 
+  .section-heading {
+    font-family: 'Inter', sans-serif; font-size: 13px; font-weight: 700;
+    letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-soft); margin-bottom: 6px;
+  }
+  .today-list-item {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 12px 0; border-bottom: 1px solid var(--line);
+  }
+  .today-list-item:last-child { border-bottom: none; }
+  .student-progress-row {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 10px 0; border-bottom: 1px solid var(--line);
+  }
+  .student-progress-row:last-child { border-bottom: none; }
+  .dots { display: flex; gap: 6px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  .dot.done { background: var(--good); }
+  .dot.pending { background: var(--line); }
+
+  .assigned-banner {
+    background: var(--accent-tint); border: 1px solid var(--accent); border-radius: 14px;
+    padding: 18px 20px; margin-bottom: 22px;
+  }
+  .assigned-label {
+    font-family: 'Inter', sans-serif; font-size: 11px; font-weight: 700;
+    letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent); margin-bottom: 10px;
+  }
+  .today-exam-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; }
+  .check {
+    font-family: 'Inter', sans-serif; font-size: 13px; width: 18px; height: 18px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center; border: 1.5px solid var(--ink-soft);
+    color: transparent; flex-shrink: 0;
+  }
+  .check.done { background: var(--good); border-color: var(--good); color: #fff; }
+  .today-exam-text { font-family: 'Inter', sans-serif; font-size: 14px; }
+  .today-exam-text.done-text { color: var(--ink-soft); text-decoration: line-through; }
+
   .card {
     background: var(--surface);
     border: 1px solid var(--line);

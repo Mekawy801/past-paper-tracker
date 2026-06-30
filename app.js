@@ -92,6 +92,7 @@ const DEFAULT_STATE = {
   lockedTotals: {}, // { examKey: totalMarks } — pre-2023 exams manually locked by teacher
   resolvedQuestions: {},
   teacherPasscode: DEFAULT_TEACHER_PASSCODE,
+  todaysPlan: {}, // { classId: [ { id, subject, paper, year, session, variant, examKey, examLabel } ] }
 };
 
 let STATE = null; // populated once Firestore loads
@@ -353,13 +354,70 @@ function renderEnterCode(student) {
   `;
 }
 
+function getStudentTodaysExams(student) {
+  const classIds = student.classIds || [];
+  const seen = new Set();
+  const exams = [];
+  for (const cid of classIds) {
+    for (const ex of STATE.todaysPlan[cid] || []) {
+      if (!seen.has(ex.examKey)) {
+        seen.add(ex.examKey);
+        exams.push(ex);
+      }
+    }
+  }
+  return exams;
+}
+
 function renderStudentMenu(student) {
+  const todaysExams = getStudentTodaysExams(student);
+  const doneCount = todaysExams.filter((ex) => hasSubmittedExam(student.id, ex)).length;
+  const nextExam = todaysExams.find((ex) => !hasSubmittedExam(student.id, ex));
+
+  let planBanner = "";
+  if (todaysExams.length > 0) {
+    const rows = todaysExams
+      .map((ex) => {
+        const done = hasSubmittedExam(student.id, ex);
+        return `
+        <div class="today-exam-row">
+          <span class="check ${done ? "done" : ""}">${done ? "✓" : "○"}</span>
+          <span class="today-exam-text ${done ? "done-text" : ""}">${escapeHtml(ex.examLabel)}</span>
+        </div>`;
+      })
+      .join("");
+    planBanner = `
+      <div class="assigned-banner">
+        <div class="assigned-label">Assigned for today · ${doneCount} of ${todaysExams.length} done</div>
+        ${rows}
+      </div>
+    `;
+  }
+
+  let mainAction;
+  if (nextExam) {
+    mainAction = `
+      <button class="btn btn-primary" data-action="goto-form-prefilled" data-examkey="${nextExam.examKey}" style="text-align:left;display:flex;justify-content:space-between;align-items:center;">
+        <span>Submit next exam</span>
+        <span class="ui" style="font-size:12px;opacity:0.85;">→</span>
+      </button>`;
+  } else if (todaysExams.length > 0) {
+    mainAction = `
+      <div class="ui" style="background:var(--accent-tint);border-radius:10px;padding:14px;text-align:center;font-size:14px;font-weight:600;color:var(--accent);">
+        All of today's exams submitted ✓
+      </div>`;
+  } else {
+    mainAction = `<button class="btn btn-primary" data-action="goto-form">Submit a result</button>`;
+  }
+
   return `
+    ${planBanner}
     <div class="card">
       <h3 style="margin:0 0 6px;">Hi, ${escapeHtml(student.name.split(" ")[0])}.</h3>
       <p class="ui" style="color:var(--ink-soft);font-size:14px;margin-bottom:22px;">What would you like to do?</p>
       <div style="display:flex;flex-direction:column;gap:10px;">
-        <button class="btn btn-primary" data-action="goto-form">Submit a result</button>
+        ${mainAction}
+        ${todaysExams.length > 0 ? `<button class="btn btn-quiet" data-action="goto-form">Submit a different exam</button>` : ""}
         <button class="btn btn-quiet" data-action="goto-progress">View my progress</button>
         <button class="btn btn-ghost" data-action="exit-to-pick-student">Switch student</button>
       </div>
@@ -580,6 +638,7 @@ function renderSubmitForm(student) {
 function renderTeacherApp() {
   const tabs = [
     ["overview", "Overview"],
+    ["plan", "Today's Plan"],
     ["questions", "Difficult Questions"],
     ["students", "Student Progress"],
     ["roster", "Manage Roster"],
@@ -597,6 +656,7 @@ function renderTeacherApp() {
 
   let body = "";
   if (TEACHER_SESSION.tab === "overview") body = renderOverviewTab();
+  else if (TEACHER_SESSION.tab === "plan") body = renderPlanTab();
   else if (TEACHER_SESSION.tab === "questions") body = renderQuestionsTab();
   else if (TEACHER_SESSION.tab === "students") body = renderStudentsTab();
   else if (TEACHER_SESSION.tab === "roster") body = renderRosterTab();
@@ -614,7 +674,142 @@ function renderTeacherApp() {
   `;
 }
 
-/* ---------------- OVERVIEW TAB ---------------- */
+/* ---------------- TODAY'S PLAN TAB ---------------- */
+
+let planTabState = {
+  selectedClassId: null,
+  formSubject: "olevel", formPaper: null, formYear: null, formSession: "jun", formVariant: 1,
+};
+
+function ensurePlanFormValid() {
+  const now = new Date().getFullYear();
+  if (planTabState.formYear == null) planTabState.formYear = now;
+  const subjectDef = SUBJECTS[planTabState.formSubject];
+  if (!subjectDef.papers.includes(planTabState.formPaper)) {
+    planTabState.formPaper = subjectDef.papers[0];
+  }
+}
+
+function renderPlanTab() {
+  if (STATE.classes.length === 0) {
+    return `<div class="card">${emptyState("Create a class first under Manage Classes, then come back here to plan exams for it.")}</div>`;
+  }
+  if (!planTabState.selectedClassId) planTabState.selectedClassId = STATE.classes[0].id;
+  ensurePlanFormValid();
+
+  const cls = STATE.classes.find((c) => c.id === planTabState.selectedClassId);
+  const classStudents = STATE.students.filter((s) => (s.classIds || []).includes(cls.id));
+  const list = STATE.todaysPlan[cls.id] || [];
+  const subjectDef = SUBJECTS[planTabState.formSubject];
+
+  const classChips = STATE.classes
+    .map((c) => `<button class="chip ${planTabState.selectedClassId === c.id ? "active" : ""}" data-action="plan-select-class" data-value="${c.id}">${escapeHtml(c.name)}</button>`)
+    .join("");
+
+  const subjectChips = Object.entries(SUBJECTS)
+    .map(([key, def]) => `<button class="chip ${planTabState.formSubject === key ? "active" : ""}" data-action="plan-set-subject" data-value="${key}">${def.label}</button>`)
+    .join("");
+
+  const paperChips = subjectDef.papers
+    .map((p) => `<button class="chip ${planTabState.formPaper === p ? "active" : ""}" data-action="plan-set-paper" data-value="${p}">Paper ${p}</button>`)
+    .join("");
+
+  const now = new Date().getFullYear();
+  const years = [];
+  for (let y = now; y >= now - 8; y--) years.push(y);
+  const yearChips = years
+    .map((y) => `<button class="chip ${planTabState.formYear === y ? "active" : ""}" data-action="plan-set-year" data-value="${y}">${y}</button>`)
+    .join("");
+
+  const sessionChips = SESSIONS.map(
+    (s) => `<button class="chip ${planTabState.formSession === s.key ? "active" : ""}" data-action="plan-set-session" data-value="${s.key}">${s.label}</button>`
+  ).join("");
+
+  let variantBlock = "";
+  if (planTabState.formSession === "mar") {
+    variantBlock = `<div class="note" style="margin-top:10px;">March only runs variant 2 — Paper ${planTabState.formPaper}2 will be added automatically.</div>`;
+  } else {
+    const variants = sessionByKey(planTabState.formSession).variants;
+    const variantChips = variants
+      .map((v) => `<button class="chip ${planTabState.formVariant === v ? "active" : ""}" data-action="plan-set-variant" data-value="${v}">${planTabState.formPaper}${v}</button>`)
+      .join("");
+    variantBlock = `<div class="field" style="margin-top:16px;margin-bottom:0;">${label("Variant")}<div style="display:flex;flex-wrap:wrap;gap:10px;">${variantChips}</div></div>`;
+  }
+
+  const listItems = list.length
+    ? list
+        .map((ex) => {
+          const subCount = classStudents.filter((s) => hasSubmittedExam(s.id, ex)).length;
+          return `
+        <div class="today-list-item">
+          <div>
+            <div class="exam-name ui" style="font-weight:600;font-size:14px;">${escapeHtml(ex.examLabel)}</div>
+            <div class="note" style="margin-top:2px;">${subCount} / ${classStudents.length} submitted</div>
+          </div>
+          <button class="btn btn-ghost btn-small" data-action="plan-remove-exam" data-id="${ex.id}">Remove</button>
+        </div>`;
+        })
+        .join("")
+    : `<div class="note">No exams added yet for this class today.</div>`;
+
+  const progressRows = classStudents.length
+    ? classStudents
+        .map((s) => {
+          const dots = list
+            .map((ex) => {
+              const done = hasSubmittedExam(s.id, ex);
+              return `<span class="dot ${done ? "done" : "pending"}"></span>`;
+            })
+            .join("");
+          return `
+        <div class="student-progress-row">
+          <div class="student-name ui" style="font-weight:600;font-size:14px;">${escapeHtml(s.name)}</div>
+          <div class="dots">${dots || '<span class="note">—</span>'}</div>
+        </div>`;
+        })
+        .join("")
+    : `<div class="note">No students in this class yet.</div>`;
+
+  return `
+    <div>
+      <div class="field">${label("Class")}<div style="display:flex;flex-wrap:wrap;gap:10px;">${classChips}</div></div>
+
+      <div class="card" style="margin-bottom:24px;">
+        <div class="field">${label("Subject")}<div style="display:flex;flex-wrap:wrap;gap:10px;">${subjectChips}</div></div>
+        <div class="field">${label("Exam to add")}<div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:10px;">${paperChips}</div>
+          <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:10px;">${yearChips}</div>
+          <div style="display:flex;flex-wrap:wrap;gap:10px;">${sessionChips}</div>
+          ${variantBlock}
+        </div>
+        <button class="btn btn-primary" data-action="plan-add-exam">+ Add to today's list</button>
+        <div class="note">Add as many exams as you're assigning today — each gets added to the list below.</div>
+      </div>
+
+      <div class="section-heading">Today's list — ${escapeHtml(cls.name)}</div>
+      <div class="card" style="margin-bottom:24px;">${listItems}</div>
+
+      <div class="section-heading">Who's done what</div>
+      <div class="card">
+        ${progressRows}
+        ${list.length ? `<div class="note" style="margin-top:14px;">Each dot is one of today's ${list.length} assigned exam${list.length === 1 ? "" : "s"} — filled means submitted.</div>` : ""}
+      </div>
+    </div>
+  `;
+}
+
+function hasSubmittedExam(studentId, plannedExam) {
+  // Match on paper/year/session/variant, not literal examKey, since a planned
+  // exam's subject (chosen by the teacher when adding it) may differ from a
+  // given student's own enrolled subject (e.g. AS vs full A Level both have Paper 1).
+  return STATE.submissions.some(
+    (s) =>
+      s.studentId === studentId &&
+      s.paper === plannedExam.paper &&
+      s.year === plannedExam.year &&
+      s.session === plannedExam.session &&
+      s.variant === plannedExam.variant
+  );
+}
 
 function renderOverviewTab() {
   if (STATE.students.length === 0) {
@@ -1342,6 +1537,24 @@ async function onRootClick(e) {
       STUDENT_SESSION.form = null; // fresh form
       render();
       break;
+    case "goto-form-prefilled": {
+      const ek = el.getAttribute("data-examkey");
+      const student = STATE.students.find((s) => s.id === STUDENT_SESSION.studentId);
+      const todaysExams = getStudentTodaysExams(student);
+      const ex = todaysExams.find((e) => e.examKey === ek);
+      STUDENT_SESSION.step = "form";
+      if (ex) {
+        STUDENT_SESSION.form = {
+          paper: ex.paper, year: ex.year, session: ex.session, variant: ex.variant,
+          score: "", totalInput: "", editTotal: false,
+          minutes: "", difficultRaw: "", error: "",
+        };
+      } else {
+        STUDENT_SESSION.form = null;
+      }
+      render();
+      break;
+    }
 
     /* ---- Submit form ---- */
     case "form-set-paper":
@@ -1492,6 +1705,42 @@ async function onRootClick(e) {
       const next = { ...STATE.lockedTotals };
       delete next[ek];
       await saveState({ lockedTotals: next });
+      break;
+    }
+
+    /* ---- Today's Plan ---- */
+    case "plan-select-class":
+      planTabState.selectedClassId = el.getAttribute("data-value");
+      render();
+      break;
+    case "plan-set-subject":
+      planTabState.formSubject = el.getAttribute("data-value");
+      planTabState.formPaper = null;
+      render();
+      break;
+    case "plan-set-paper":
+      planTabState.formPaper = Number(el.getAttribute("data-value"));
+      render();
+      break;
+    case "plan-set-year":
+      planTabState.formYear = Number(el.getAttribute("data-value"));
+      render();
+      break;
+    case "plan-set-session":
+      planTabState.formSession = el.getAttribute("data-value");
+      planTabState.formVariant = planTabState.formSession === "mar" ? 2 : 1;
+      render();
+      break;
+    case "plan-set-variant":
+      planTabState.formVariant = Number(el.getAttribute("data-value"));
+      render();
+      break;
+    case "plan-add-exam":
+      await handlePlanAddExam();
+      break;
+    case "plan-remove-exam": {
+      const id = el.getAttribute("data-id");
+      await handlePlanRemoveExam(id);
       break;
     }
 
@@ -1675,6 +1924,33 @@ async function handleClassDelete(id) {
   }));
   classesTabState.confirmDeleteId = null;
   await saveState({ classes: nextClasses, students: nextStudents });
+}
+
+async function handlePlanAddExam() {
+  const cls = STATE.classes.find((c) => c.id === planTabState.selectedClassId);
+  if (!cls) return;
+  const { formSubject, formPaper, formYear, formSession } = planTabState;
+  const variant = formSession === "mar" ? 2 : planTabState.formVariant;
+  const ek = examKey(formSubject, formPaper, formYear, formSession, variant);
+  const exam = {
+    id: uid(),
+    subject: formSubject, paper: formPaper, year: formYear, session: formSession, variant,
+    examKey: ek,
+    examLabel: examLabel(formSubject, formPaper, formYear, formSession, variant),
+  };
+  const existing = STATE.todaysPlan[cls.id] || [];
+  // avoid adding the exact same exam twice to the same class's list
+  if (existing.some((e) => e.examKey === ek)) return;
+  const next = { ...STATE.todaysPlan, [cls.id]: [...existing, exam] };
+  await saveState({ todaysPlan: next });
+}
+
+async function handlePlanRemoveExam(examId) {
+  const cls = STATE.classes.find((c) => c.id === planTabState.selectedClassId);
+  if (!cls) return;
+  const existing = STATE.todaysPlan[cls.id] || [];
+  const next = { ...STATE.todaysPlan, [cls.id]: existing.filter((e) => e.id !== examId) };
+  await saveState({ todaysPlan: next });
 }
 
 async function handleSettingsSave() {

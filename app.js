@@ -1,7 +1,7 @@
 /* ============================================================
    PAST PAPER TRACKER — standalone vanilla JS app
    Backend: Firebase Firestore (single shared document)
-   No build step, no framework — plain DOM rendering
+   No build step, no framework — plain DOM rendering.
    ============================================================ */
 
 /* ---------------- DATA MODEL ---------------- */
@@ -354,14 +354,15 @@ function renderEnterCode(student) {
   `;
 }
 
-function getStudentTodaysExams(student) {
+function getStudentAllPlannedExams(student) {
   const classIds = student.classIds || [];
-  const seen = new Set();
+  const seen = new Set(); // dedupe by examKey+date combo
   const exams = [];
   for (const cid of classIds) {
     for (const ex of STATE.todaysPlan[cid] || []) {
-      if (!seen.has(ex.examKey)) {
-        seen.add(ex.examKey);
+      const dedupeKey = `${ex.examKey}::${ex.date || todayDateString()}`;
+      if (!seen.has(dedupeKey)) {
+        seen.add(dedupeKey);
         exams.push(ex);
       }
     }
@@ -369,27 +370,81 @@ function getStudentTodaysExams(student) {
   return exams;
 }
 
-function renderStudentMenu(student) {
-  const todaysExams = getStudentTodaysExams(student);
-  const doneCount = todaysExams.filter((ex) => hasSubmittedExam(student.id, ex)).length;
-  const nextExam = todaysExams.find((ex) => !hasSubmittedExam(student.id, ex));
+function bucketStudentExams(student) {
+  const all = getStudentAllPlannedExams(student);
+  const today = todayDateString();
+  const weekOut = addDays(today, 7);
 
-  let planBanner = "";
-  if (todaysExams.length > 0) {
-    const rows = todaysExams
-      .map((ex) => {
-        const done = hasSubmittedExam(student.id, ex);
-        return `
-        <div class="today-exam-row">
-          <span class="check ${done ? "done" : ""}">${done ? "✓" : "○"}</span>
-          <span class="today-exam-text ${done ? "done-text" : ""}">${escapeHtml(ex.examLabel)}</span>
-        </div>`;
-      })
-      .join("");
-    planBanner = `
-      <div class="assigned-banner">
-        <div class="assigned-label">Assigned for today · ${doneCount} of ${todaysExams.length} done</div>
+  const overdue = [];
+  const todays = [];
+  const upcoming = [];
+
+  for (const ex of all) {
+    const d = ex.date || today;
+    const submitted = hasSubmittedExam(student.id, ex);
+    if (d < today) {
+      if (!submitted) overdue.push(ex); // past-date, unsubmitted -> stays visible until done
+    } else if (d === today) {
+      todays.push(ex);
+    } else if (d <= weekOut) {
+      upcoming.push(ex); // next 7 days, shown only in the expandable section
+    }
+  }
+  // sort each bucket chronologically (overdue oldest-first so the longest-overdue surfaces first)
+  overdue.sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+  upcoming.sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+
+  return { overdue, todays, upcoming };
+}
+
+let studentMenuState = { showUpcoming: false };
+
+function examRowHtml(ex, done, showDate) {
+  return `
+    <div class="today-exam-row">
+      <span class="check ${done ? "done" : ""}">${done ? "✓" : "○"}</span>
+      <span class="today-exam-text ${done ? "done-text" : ""}">${escapeHtml(ex.examLabel)}${showDate ? ` <span style="color:var(--ink-soft);">· ${formatPlanDate(ex.date)}</span>` : ""}</span>
+    </div>`;
+}
+
+function renderStudentMenu(student) {
+  const { overdue, todays, upcoming } = bucketStudentExams(student);
+  const doneToday = todays.filter((ex) => hasSubmittedExam(student.id, ex)).length;
+  // priority order for "submit next": overdue first, then today's unfinished
+  const nextExam =
+    overdue.find((ex) => !hasSubmittedExam(student.id, ex)) || todays.find((ex) => !hasSubmittedExam(student.id, ex));
+
+  let overdueBlock = "";
+  if (overdue.length > 0) {
+    const rows = overdue.map((ex) => examRowHtml(ex, false, true)).join("");
+    overdueBlock = `
+      <div class="assigned-banner" style="background:#FBEAEA;border-color:var(--danger);margin-bottom:14px;">
+        <div class="assigned-label" style="color:var(--danger);">Overdue · ${overdue.length} not yet submitted</div>
         ${rows}
+      </div>
+    `;
+  }
+
+  let todayBlock = "";
+  if (todays.length > 0) {
+    const rows = todays.map((ex) => examRowHtml(ex, hasSubmittedExam(student.id, ex), false)).join("");
+    todayBlock = `
+      <div class="assigned-banner">
+        <div class="assigned-label">Today · ${doneToday} of ${todays.length} done</div>
+        ${rows}
+      </div>
+    `;
+  }
+
+  let upcomingBlock = "";
+  if (upcoming.length > 0) {
+    const rows = upcoming.map((ex) => examRowHtml(ex, false, true)).join("");
+    upcomingBlock = `
+      <div style="margin-bottom:22px;">
+        <button class="ui" data-action="toggle-upcoming-plan" style="background:none;border:none;color:var(--accent);font-size:13px;font-weight:600;cursor:pointer;padding:0;display:flex;align-items:center;gap:6px;">
+          ${studentMenuState.showUpcoming ? "▾" : "▸"} Next 7 days (${upcoming.length})
+        </button>
+        ${studentMenuState.showUpcoming ? `<div class="card" style="margin-top:10px;">${rows}</div>` : ""}
       </div>
     `;
   }
@@ -401,23 +456,27 @@ function renderStudentMenu(student) {
         <span>Submit next exam</span>
         <span class="ui" style="font-size:12px;opacity:0.85;">→</span>
       </button>`;
-  } else if (todaysExams.length > 0) {
+  } else if (todays.length > 0 || overdue.length > 0) {
     mainAction = `
       <div class="ui" style="background:var(--accent-tint);border-radius:10px;padding:14px;text-align:center;font-size:14px;font-weight:600;color:var(--accent);">
-        All of today's exams submitted ✓
+        All caught up ✓
       </div>`;
   } else {
     mainAction = `<button class="btn btn-primary" data-action="goto-form">Submit a result</button>`;
   }
 
+  const hasAnyPlan = overdue.length > 0 || todays.length > 0;
+
   return `
-    ${planBanner}
+    ${overdueBlock}
+    ${todayBlock}
+    ${upcomingBlock}
     <div class="card">
       <h3 style="margin:0 0 6px;">Hi, ${escapeHtml(student.name.split(" ")[0])}.</h3>
       <p class="ui" style="color:var(--ink-soft);font-size:14px;margin-bottom:22px;">What would you like to do?</p>
       <div style="display:flex;flex-direction:column;gap:10px;">
         ${mainAction}
-        ${todaysExams.length > 0 ? `<button class="btn btn-quiet" data-action="goto-form">Submit a different exam</button>` : ""}
+        ${hasAnyPlan ? `<button class="btn btn-quiet" data-action="goto-form">Submit a different exam</button>` : ""}
         <button class="btn btn-quiet" data-action="goto-progress">View my progress</button>
         <button class="btn btn-ghost" data-action="exit-to-pick-student">Switch student</button>
       </div>
@@ -676,14 +735,36 @@ function renderTeacherApp() {
 
 /* ---------------- TODAY'S PLAN TAB ---------------- */
 
+function todayDateString() {
+  const d = new Date();
+  return d.toISOString().slice(0, 10); // YYYY-MM-DD, local-ish enough for this use case
+}
+
+function addDays(dateStr, n) {
+  const d = new Date(dateStr + "T00:00:00");
+  d.setDate(d.getDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+function formatPlanDate(dateStr) {
+  const today = todayDateString();
+  if (dateStr === today) return "Today";
+  const tomorrow = addDays(today, 1);
+  if (dateStr === tomorrow) return "Tomorrow";
+  const d = new Date(dateStr + "T00:00:00");
+  return d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+}
+
 let planTabState = {
   selectedClassId: null,
   formSubject: "olevel", formPaper: null, formYear: null, formSession: "jun", formVariant: 1,
+  formDate: null,
 };
 
 function ensurePlanFormValid() {
   const now = new Date().getFullYear();
   if (planTabState.formYear == null) planTabState.formYear = now;
+  if (planTabState.formDate == null) planTabState.formDate = todayDateString();
   const subjectDef = SUBJECTS[planTabState.formSubject];
   if (!subjectDef.papers.includes(planTabState.formPaper)) {
     planTabState.formPaper = subjectDef.papers[0];
@@ -699,8 +780,9 @@ function renderPlanTab() {
 
   const cls = STATE.classes.find((c) => c.id === planTabState.selectedClassId);
   const classStudents = STATE.students.filter((s) => (s.classIds || []).includes(cls.id));
-  const list = STATE.todaysPlan[cls.id] || [];
+  const allList = STATE.todaysPlan[cls.id] || [];
   const subjectDef = SUBJECTS[planTabState.formSubject];
+  const today = todayDateString();
 
   const classChips = STATE.classes
     .map((c) => `<button class="chip ${planTabState.selectedClassId === c.id ? "active" : ""}" data-action="plan-select-class" data-value="${c.id}">${escapeHtml(c.name)}</button>`)
@@ -736,26 +818,67 @@ function renderPlanTab() {
     variantBlock = `<div class="field" style="margin-top:16px;margin-bottom:0;">${label("Variant")}<div style="display:flex;flex-wrap:wrap;gap:10px;">${variantChips}</div></div>`;
   }
 
-  const listItems = list.length
-    ? list
-        .map((ex) => {
-          const subCount = classStudents.filter((s) => hasSubmittedExam(s.id, ex)).length;
+  // Date picker: quick chips for Today / Tomorrow / +2 days, plus a raw date input for anything further out
+  const quickDates = [today, addDays(today, 1), addDays(today, 2)];
+  const dateChips = quickDates
+    .map((d) => `<button class="chip ${planTabState.formDate === d ? "active" : ""}" data-action="plan-set-date" data-value="${d}">${formatPlanDate(d)}</button>`)
+    .join("");
+  const isCustomDate = !quickDates.includes(planTabState.formDate);
+  const dateField = `
+    <div class="field">
+      ${label("Date")}
+      <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;">
+        ${dateChips}
+        <input id="plan-date-custom" type="text" placeholder="YYYY-MM-DD" value="${isCustomDate ? escapeHtml(planTabState.formDate) : ""}" style="width:150px;" />
+      </div>
+      <div class="note">Pick a quick option or type any date to plan ahead.</div>
+      ${planTabState.dateError ? `<div class="ui" style="color:var(--danger);font-size:13px;margin-top:6px;">${escapeHtml(planTabState.dateError)}</div>` : ""}
+    </div>
+  `;
+
+  // Group this class's full plan by date, sorted chronologically, for the listing below
+  const byDate = new Map();
+  for (const ex of allList) {
+    const d = ex.date || today; // back-compat for any exams added before dates existed
+    if (!byDate.has(d)) byDate.set(d, []);
+    byDate.get(d).push(ex);
+  }
+  const sortedDates = Array.from(byDate.keys()).sort();
+
+  const listSections = sortedDates.length
+    ? sortedDates
+        .map((d) => {
+          const exams = byDate.get(d);
+          const isPast = d < today;
+          const items = exams
+            .map((ex) => {
+              const subCount = classStudents.filter((s) => hasSubmittedExam(s.id, ex)).length;
+              return `
+            <div class="today-list-item">
+              <div>
+                <div class="exam-name ui" style="font-weight:600;font-size:14px;">${escapeHtml(ex.examLabel)}</div>
+                <div class="note" style="margin-top:2px;">${subCount} / ${classStudents.length} submitted</div>
+              </div>
+              <button class="btn btn-ghost btn-small" data-action="plan-remove-exam" data-id="${ex.id}">Remove</button>
+            </div>`;
+            })
+            .join("");
           return `
-        <div class="today-list-item">
-          <div>
-            <div class="exam-name ui" style="font-weight:600;font-size:14px;">${escapeHtml(ex.examLabel)}</div>
-            <div class="note" style="margin-top:2px;">${subCount} / ${classStudents.length} submitted</div>
-          </div>
-          <button class="btn btn-ghost btn-small" data-action="plan-remove-exam" data-id="${ex.id}">Remove</button>
-        </div>`;
+            <div style="margin-bottom:14px;">
+              <div class="note" style="font-weight:700;margin-bottom:4px;${isPast ? "color:var(--danger);" : ""}">${formatPlanDate(d)}${isPast ? " (overdue)" : ""}</div>
+              ${items}
+            </div>
+          `;
         })
         .join("")
-    : `<div class="note">No exams added yet for this class today.</div>`;
+    : `<div class="note">No exams planned yet for this class.</div>`;
 
+  // "Who's done what" stays scoped to today's exams only — future-dated exams have nothing to track yet
+  const todaysExamsForClass = allList.filter((ex) => (ex.date || today) === today);
   const progressRows = classStudents.length
     ? classStudents
         .map((s) => {
-          const dots = list
+          const dots = todaysExamsForClass
             .map((ex) => {
               const done = hasSubmittedExam(s.id, ex);
               return `<span class="dot ${done ? "done" : "pending"}"></span>`;
@@ -781,17 +904,18 @@ function renderPlanTab() {
           <div style="display:flex;flex-wrap:wrap;gap:10px;">${sessionChips}</div>
           ${variantBlock}
         </div>
-        <button class="btn btn-primary" data-action="plan-add-exam">+ Add to today's list</button>
-        <div class="note">Add as many exams as you're assigning today — each gets added to the list below.</div>
+        ${dateField}
+        <button class="btn btn-primary" data-action="plan-add-exam">+ Add to plan</button>
+        <div class="note">Add as many exams as you like — each gets added under its chosen date below.</div>
       </div>
 
-      <div class="section-heading">Today's list — ${escapeHtml(cls.name)}</div>
-      <div class="card" style="margin-bottom:24px;">${listItems}</div>
+      <div class="section-heading">Plan — ${escapeHtml(cls.name)}</div>
+      <div class="card" style="margin-bottom:24px;">${listSections}</div>
 
-      <div class="section-heading">Who's done what</div>
+      <div class="section-heading">Who's done what — Today</div>
       <div class="card">
         ${progressRows}
-        ${list.length ? `<div class="note" style="margin-top:14px;">Each dot is one of today's ${list.length} assigned exam${list.length === 1 ? "" : "s"} — filled means submitted.</div>` : ""}
+        ${todaysExamsForClass.length ? `<div class="note" style="margin-top:14px;">Each dot is one of today's ${todaysExamsForClass.length} assigned exam${todaysExamsForClass.length === 1 ? "" : "s"} — filled means submitted.</div>` : ""}
       </div>
     </div>
   `;
@@ -1424,6 +1548,7 @@ function onRootInput(e) {
   else if (id === "settings-current") { settingsTabState.current = e.target.value; }
   else if (id === "settings-next") { settingsTabState.next = e.target.value; }
   else if (id === "settings-confirm") { settingsTabState.confirm = e.target.value; }
+  else if (id === "plan-date-custom") { planTabState.formDate = e.target.value; } // no render() — avoid losing focus while typing a date
 }
 
 // Lightweight partial re-render for the search box so focus isn't lost on every keystroke
@@ -1532,6 +1657,10 @@ async function onRootClick(e) {
       STUDENT_SESSION.step = "progress";
       render();
       break;
+    case "toggle-upcoming-plan":
+      studentMenuState.showUpcoming = !studentMenuState.showUpcoming;
+      render();
+      break;
     case "goto-form":
       STUDENT_SESSION.step = "form";
       STUDENT_SESSION.form = null; // fresh form
@@ -1540,8 +1669,8 @@ async function onRootClick(e) {
     case "goto-form-prefilled": {
       const ek = el.getAttribute("data-examkey");
       const student = STATE.students.find((s) => s.id === STUDENT_SESSION.studentId);
-      const todaysExams = getStudentTodaysExams(student);
-      const ex = todaysExams.find((e) => e.examKey === ek);
+      const allExams = getStudentAllPlannedExams(student);
+      const ex = allExams.find((e) => e.examKey === ek);
       STUDENT_SESSION.step = "form";
       if (ex) {
         STUDENT_SESSION.form = {
@@ -1733,6 +1862,10 @@ async function onRootClick(e) {
       break;
     case "plan-set-variant":
       planTabState.formVariant = Number(el.getAttribute("data-value"));
+      render();
+      break;
+    case "plan-set-date":
+      planTabState.formDate = el.getAttribute("data-value");
       render();
       break;
     case "plan-add-exam":
@@ -1932,15 +2065,26 @@ async function handlePlanAddExam() {
   const { formSubject, formPaper, formYear, formSession } = planTabState;
   const variant = formSession === "mar" ? 2 : planTabState.formVariant;
   const ek = examKey(formSubject, formPaper, formYear, formSession, variant);
+
+  const dateStr = (planTabState.formDate || "").trim();
+  const validDate = /^\d{4}-\d{2}-\d{2}$/.test(dateStr) && !Number.isNaN(new Date(dateStr + "T00:00:00").getTime());
+  if (!validDate) {
+    planTabState.dateError = "Enter a valid date as YYYY-MM-DD, or pick one of the quick options.";
+    render();
+    return;
+  }
+  planTabState.dateError = null;
+
   const exam = {
     id: uid(),
     subject: formSubject, paper: formPaper, year: formYear, session: formSession, variant,
     examKey: ek,
     examLabel: examLabel(formSubject, formPaper, formYear, formSession, variant),
+    date: dateStr,
   };
   const existing = STATE.todaysPlan[cls.id] || [];
-  // avoid adding the exact same exam twice to the same class's list
-  if (existing.some((e) => e.examKey === ek)) return;
+  // avoid adding the exact same exam to the same class on the same date twice
+  if (existing.some((e) => e.examKey === ek && e.date === dateStr)) return;
   const next = { ...STATE.todaysPlan, [cls.id]: [...existing, exam] };
   await saveState({ todaysPlan: next });
 }
@@ -2001,4 +2145,8 @@ Object.defineProperty(window, "STUDENT_SESSION", {
 Object.defineProperty(window, "TEACHER_SESSION", {
   get: () => TEACHER_SESSION,
   set: (v) => { TEACHER_SESSION = v; },
+});
+Object.defineProperty(window, "studentMenuState", {
+  get: () => studentMenuState,
+  set: (v) => { studentMenuState = v; },
 });

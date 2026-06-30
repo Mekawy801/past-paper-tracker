@@ -1,7 +1,7 @@
 /* ============================================================
    PAST PAPER TRACKER — standalone vanilla JS app
    Backend: Firebase Firestore (single shared document)
-   No build step, no framework — plain DOM rendering.
+   No build step, no framework — plain DOM rendering
    ============================================================ */
 
 /* ---------------- DATA MODEL ---------------- */

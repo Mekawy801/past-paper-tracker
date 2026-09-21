@@ -2,3 +2,19 @@
 @media(max-width:480px){.auth-card{padding:22px}.tabs button{min-height:48px}.schedule-row{grid-template-columns:1fr}.schedule-row label:first-child{grid-column:auto}.chart{height:190px}.top-actions{gap:4px}.brand{font-size:1rem}.card,.stat{padding:17px}}
 .plot-point{cursor:pointer}.plot-point .point-hit{fill:transparent}.plot-point:hover circle:last-child,.plot-point.selected circle:last-child{stroke:#183d2b;stroke-width:3}.plot-point:focus-visible{outline:none}.plot-point:focus-visible circle:last-child{stroke:#183d2b;stroke-width:4}.point-detail{display:grid;gap:4px;padding:12px 14px;margin-top:8px;border-radius:10px;background:#edf5ec;font-size:.85rem}.point-detail span{color:#53675b}.class-choices{display:flex;flex-wrap:wrap;gap:10px}.class-choice{display:flex;align-items:center;gap:8px;border:1px solid #cfdccd;border-radius:9px;padding:10px 12px;min-height:44px}.class-choice input{width:20px;height:20px;min-height:20px;margin:0;accent-color:#2c7047}.class-choice span{font-size:.85rem}
 .entries-wrap{margin-top:18px}.entry-form{border-top:1px solid #e4eae2;padding:4px 0 18px}.entry p{margin-top:4px}
+/* Blue classroom theme and touch-friendly layouts. */
+:root{color:#193150;background:#f3f7fd}
+.top,.tabs{border-color:#d7e3f3}.brand{color:#123b77}.brand small,.muted,.helper,label,.small{color:#60758e}
+.eyebrow{color:#2e69bd}.tabs button{color:#60758e}.tabs button.active{color:#1556aa;border-color:#2677d7}
+.card,.stat,.auth-card{border-color:#d7e3f3;box-shadow:0 4px 20px rgba(28,77,139,.035)}
+.stat:first-child{background:#e8f1ff;border-color:#d2e5ff}
+.btn{background:#1766c8;border-color:#1766c8}.btn:hover{background:#1156ad;border-color:#1156ad}
+.btn.secondary{color:#1657a7;background:#fff;border-color:#bfd4ee}.btn.ghost{color:#1657a7;background:transparent}.btn.danger{color:#a42d36;background:#fff;border-color:#ebbdc1}.btn.danger:hover{color:#fff;background:#a42d36}
+.pill{background:#e6f1ff;color:#175aa6}.pill.wait{background:#fff1dd;color:#946215}
+input,select,textarea{border-color:#c4d5ea;color:#193150}button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline-color:#75a9ed}
+.notice{background:#e5f0ff;color:#1657a7}.error{background:#fff0e9;color:#a64625}.item,.question,.divider,.entry-form{border-color:#e2eaf6}
+.chart .gridline{stroke:#e2eaf6}.chart text{fill:#6c8199}.point-detail{background:#eaf3ff}.point-detail span{color:#546f8e}.plot-point:hover circle:last-child,.plot-point.selected circle:last-child,.plot-point:focus-visible circle:last-child{stroke:#103e7e}
+.class-choice{border-color:#c4d5ea}.class-choice input{accent-color:#1766c8}.receipt{border-color:#2677d7}.upload{border-color:#b4d0f0;background:#f8fbff}
+.question-tile{border:1px solid #d7e3f3;border-radius:15px;background:linear-gradient(135deg,#fff,#f7fbff);padding:18px;margin-top:14px}.question-tile strong{font-size:1.3rem;color:#164e96}.question-tile details{margin-top:14px}.question-tile summary{color:#155eb7;cursor:pointer;font-size:.85rem;font-weight:600}.question-tile details p{margin-top:8px}.part-summary{color:#314d70;font-weight:600;margin-top:10px}.total-tool{background:#f0f6ff;border:1px solid #c9ddf7;border-radius:12px;padding:14px;margin:14px 0}.total-tool p{margin:5px 0 10px}.exam-row{border-top:1px solid #e2eaf6;padding:14px 0}.exam-row .fields{grid-template-columns:repeat(4,minmax(0,1fr));margin:0 0 8px}.exam-row strong{color:#193e75}
+@media(max-width:720px){.exam-row .fields{grid-template-columns:repeat(2,minmax(0,1fr))}.card,.stat{padding:18px}.filters label{min-width:min(100%,210px)}.question-tile{padding:15px}.top{align-items:flex-start}.brand small{max-width:220px}}
+@media(max-width:440px){.exam-row .fields{grid-template-columns:repeat(2,minmax(0,1fr))}.btn{min-height:44px}.brand small{font-size:.67rem}.filters{display:grid;grid-template-columns:1fr}.filters label{width:100%}.question-tile .row{align-items:flex-start}}
